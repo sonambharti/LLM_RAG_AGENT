@@ -1,0 +1,12 @@
+langchain[groq]
+langchain-text-splitters 
+langchain-community 
+langgraph
+langchain-openai
+langchain-huggingface
+sentence-transformers
+ipykernel
+pymupdf
+python-docx
+gradio
+faiss-cpu
