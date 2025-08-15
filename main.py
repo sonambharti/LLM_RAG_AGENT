@@ -237,6 +237,7 @@ def build_vectorstore(documents: List[Document]) -> PineconeVectorStore:
 # ================== GLOBALS ==================
 qa_chain = None
 vectorstore = None
+llm_simple = None
 
 # ================== RAG LOGIC ==================
 def initialize_rag_chain():
@@ -307,6 +308,9 @@ def initialize_rag_chain():
         
         # Create LLM
         llm = ChatOpenAI(model_name="gpt-4o-mini", temperature=0)
+        # Lightweight LLM for controlled step generation
+        global llm_simple
+        llm_simple = ChatOpenAI(model_name="gpt-4o-mini", temperature=0.2)
         
         # Create QA chain
         qa_chain = RetrievalQA.from_chain_type(
@@ -498,6 +502,7 @@ class ScriptManager:
         # Multi-language script templates
         self.script_templates = {
             "Hindi": {
+                "identify_user": "कृपया अपना User ID बताइए (उदाहरण: user_1)।",
                 "start": "नमस्कार, क्या मेरी बात [Guarantor Name] जी से हो रही है?",
                 "intro": "मैं Rekha, SK Finance Limited से बात कर रही हूँ। यह कॉल [Applicant Name] द्वारा SK Finance में किए गए लोन आवेदन से संबंधित है। आपके दस्तावेज़ हमारे पास गारंटर के रूप में प्राप्त हुए हैं। क्या मैं आपसे दो मिनट बात कर सकती हूँ?",
                 "recording": "धन्यवाद। अब मैं आपकी लोन से जुड़ी, कुछ जानकारी की पुष्टि करना चाहूँगी। आपकी यह कॉल ट्रेनिंग और क्वालिटी पर्पस के लिए रिकॉर्ड किया जाएगा।",
@@ -510,6 +515,7 @@ class ScriptManager:
                 "closing": "SK Finance Limited से जुड़ने के लिए धन्यवाद। आपका दिन शुभ हो।"
             },
             "English": {
+                "identify_user": "Please provide your User ID (e.g., user_1).",
                 "start": "Hello, am I speaking with [Guarantor Name]?",
                 "intro": "I am Rekha from SK Finance Limited. This call is related to a loan application made by [Applicant Name] at SK Finance. Your documents have been received with us as a guarantor. May I speak with you for two minutes?",
                 "recording": "Thank you. Now I would like to verify some information related to your loan. This call will be recorded for training and quality purposes.",
@@ -524,7 +530,7 @@ class ScriptManager:
         }
         
         self.step_sequence = [
-            "start", "intro", "recording", "applicant_knowledge", 
+            "identify_user", "start", "intro", "recording", "applicant_knowledge", 
             "relationship", "dob", "father_name", "documents", 
             "final_info", "closing"
         ]
@@ -533,6 +539,7 @@ class ScriptManager:
         self.conversation_progress = []
         self.current_language = "Hindi"  # Default language
         self.language_switched = False
+        self.verification_results = {"applicant_knowledge": None, "relationship": None, "dob": None, "father_name": None}
     
     def get_script_text(self, step: str) -> str:
         """Get script text in current language with variables replaced"""
@@ -603,6 +610,9 @@ class ScriptManager:
         
         # Verify user response
         is_correct, verification_message = user_data_manager.verify_user_response(step, user_response)
+        # Track verification outcomes without revealing stored values
+        if step in self.verification_results:
+            self.verification_results[step] = bool(is_correct)
         
         if is_correct:
             # Move to next step
@@ -613,22 +623,46 @@ class ScriptManager:
             # Get next step text
             if self.current_step_index < len(self.step_sequence):
                 next_step = self.step_sequence[self.current_step_index]
-                next_step_text = self.get_script_text(next_step)
+                next_step_text = self._generate_output(next_step, user_response)
                 logger.info(f"📝 Next step: {next_step}")
                 return f"{verification_message}\n\n{next_step_text}"
             else:
                 logger.info("🏁 Reached end of script")
-                return f"{verification_message}\n\n{self.get_script_text('closing')}"
+                summary_text = self._log_conversation_summary()
+                return f"{verification_message}\n\n{self.get_script_text('closing')}\n\n{summary_text}"
         else:
             # Stay on same step, show error and repeat question
             logger.info(f"❌ Verification failed for step {step}: {verification_message}")
-            current_step_text = self.get_script_text(step)
+            current_step_text = self._generate_output(step, user_response)
             return f"{verification_message}\n\n{current_step_text}"
     
     def _handle_regular_step(self, step: str, user_response: str) -> str:
         """Handle regular steps (non-verification)"""
         logger.info(f"🔍 Processing regular step: {step} with response: {user_response[:50]}...")
         
+        # Special handling for user identification step
+        if step == "identify_user":
+            user_response_clean = (user_response or "").strip().lower()
+            available_users = user_data_manager.get_all_users()
+            matched_user = None
+            for uid in available_users:
+                if uid.lower() in user_response_clean:
+                    matched_user = uid
+                    break
+            if matched_user:
+                user_data_manager.set_current_user(matched_user)
+                # Set language preference
+                self._set_guarantor_language()
+                # Move to next step and generate output
+                self.current_step_index += 1
+                next_step = self.step_sequence[self.current_step_index]
+                next_line = self._generate_output(next_step, user_response)
+                return f"✅ User '{matched_user}' set.\n\n{next_line}"
+            else:
+                prompt_line = self.get_script_text("identify_user")
+                helper = "\n\nType 'users' to list available IDs." if available_users else ""
+                return f"{prompt_line}{helper}"
+
         # Check if we should advance
         should_advance = self._should_advance_step(user_response)
         logger.info(f"🤔 Should advance step? {should_advance}")
@@ -645,12 +679,16 @@ class ScriptManager:
         
         # Get current step text
         current_step = self.step_sequence[self.current_step_index]
-        response = self.get_script_text(current_step)
+        response = self._generate_output(current_step, user_response)
         
         # Log progress
         logger.info(f"📝 Script Progress: Step {self.current_step_index + 1}/{len(self.step_sequence)} - {current_step}")
         logger.info(f"💬 User Response: {user_response[:100]}...")
         logger.info(f"🤖 Bot Response: {response[:100]}...")
+
+        # If we are at closing, log summary
+        if current_step == "closing":
+            self._log_conversation_summary()
         
         return response
     
@@ -689,7 +727,8 @@ class ScriptManager:
             'total_steps': len(self.step_sequence),
             'progress_percentage': ((self.current_step_index + 1) / len(self.step_sequence)) * 100,
             'conversation_progress': self.conversation_progress,
-            'current_language': self.current_language
+            'current_language': self.current_language,
+            'verification_results': self.verification_results
         }
     
     def reset_conversation(self):
@@ -708,6 +747,48 @@ class ScriptManager:
             if preferred_language in self.script_templates:
                 self.current_language = preferred_language
                 logger.info(f"🌐 Set language to guarantor's preference: {preferred_language}")
+
+    def _generate_output(self, step: str, user_response: str) -> str:
+        """Use a lightweight LLM to produce the next line while enforcing no data leakage"""
+        base_line = self.get_script_text(step)
+        if llm_simple is None:
+            return base_line
+        try:
+            from langchain.prompts import ChatPromptTemplate
+            prompt = ChatPromptTemplate.from_messages([
+                ("system", "You are 'Rekha', a compliant loan verification assistant. Speak exactly ONE short sentence for the next step. Do not reveal any stored user data such as date of birth, father's name, phone number, address, place, or any values that are not directly stated by the user. If the step asks for such information, only ask the user to provide it. Keep the message in the specified language."),
+                ("human", "Language: {language}\nStep: {step}\nBase line to follow: {base_line}\nUser said: {user_response}\nOutput only the single next sentence.")
+            ])
+            chain = prompt | llm_simple
+            return chain.invoke({
+                "language": self.current_language,
+                "step": step,
+                "base_line": base_line,
+                "user_response": user_response or ""
+            }).content.strip()
+        except Exception as e:
+            logger.warning(f"LLM generation failed, falling back to base line. Error: {e}")
+            return base_line
+
+    def _log_conversation_summary(self) -> str:
+        """Log a concise summary stating if verification is successful or not"""
+        user_id = user_data_manager.current_user or "unknown"
+        user_info = user_data_manager.get_current_user_data() or {}
+        all_verification_steps = [k for k in self.verification_results.keys()]
+        passed = all(self.verification_results.get(k) is True for k in all_verification_steps)
+        summary = {
+            "user_id": user_id,
+            "applicant": user_info.get('Applicant Name', 'N/A'),
+            "guarantor": user_info.get('Guarantor Name', 'N/A'),
+            "language": self.current_language,
+            "verification_results": self.verification_results,
+            "verification_successful": passed,
+            "steps_completed": self.current_step_index + 1,
+            "total_steps": len(self.step_sequence)
+        }
+        logger.info(f"📘 Conversation Summary: {summary}")
+        status_line = "✅ Verification successful." if passed else "❌ Verification not successful."
+        return status_line
     
     def get_user_info_display(self) -> str:
         """Get formatted user information for display"""
@@ -747,7 +828,7 @@ def ques_responses(question: str, history: list, system_prompt: str) -> str:
         if question.lower() in ['reset', 'restart', 'start over', 'नया शुरू करें']:
             script_manager.reset_conversation()
             timer.end_timer("Retrieval")
-            return "🔄 Conversation reset. Starting fresh verification process.\n\n" + script_manager.get_script_text('start')
+            return "🔄 Conversation reset. Starting fresh verification process.\n\n" + script_manager.get_script_text('identify_user')
         
         if question.lower() in ['progress', 'status', 'कहाँ हैं हम']:
             summary = script_manager.get_conversation_summary()
@@ -768,7 +849,7 @@ def ques_responses(question: str, history: list, system_prompt: str) -> str:
             if user_data_manager.set_current_user(user_id):
                 script_manager.reset_conversation()
                 timer.end_timer("Retrieval")
-                return f"✅ Switched to user: {user_id}\n🔄 Conversation reset for new user.\n\n" + script_manager.get_script_text('start')
+                return f"✅ Switched to user: {user_id}\n🔄 Conversation reset for new user.\n\n" + script_manager.get_script_text('identify_user')
             else:
                 timer.end_timer("Retrieval")
                 available_users = user_data_manager.get_all_users()
