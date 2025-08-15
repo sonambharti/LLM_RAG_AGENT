@@ -1,4 +1,5 @@
 import os
+import csv
 import time
 import fitz
 from docx import Document as DocxDocument
@@ -337,44 +338,46 @@ class UserDataManager:
         self.load_user_data()
     
     def load_user_data(self):
-        """Load all user data from CSV files"""
+        """Load all user data from CSV files.
+        Supports a single CSV containing multiple users (one per row) with a 'User ID' column.
+        """
         try:
             if not os.path.exists(self.user_data_folder):
                 logger.warning(f"User data folder '{self.user_data_folder}' not found")
                 return
-            
+
             csv_files = [f for f in os.listdir(self.user_data_folder) if f.endswith('.csv')]
             logger.info(f"📁 Found {len(csv_files)} user data files")
-            
+
             for csv_file in csv_files:
                 file_path = os.path.join(self.user_data_folder, csv_file)
-                user_id = csv_file.replace('.csv', '')
-                
+
                 try:
                     with open(file_path, 'r', encoding='utf-8') as f:
-                        lines = f.readlines()
-                        if len(lines) >= 2:  # Header + data
-                            headers = [h.strip() for h in lines[0].split(',')]
-                            data = [d.strip() for d in lines[1].split(',')]
-                            
-                            # Create user data dictionary
-                            user_info = {}
-                            for i, header in enumerate(headers):
-                                if i < len(data):
-                                    user_info[header.strip()] = data[i].strip()
-                            
-                            self.user_data[user_id] = user_info
-                            logger.info(f"✅ Loaded user data for {user_id}: {user_info.get('Applicant Name', 'Unknown')}")
-                
+                        reader = csv.DictReader(f)
+                        row_count = 0
+                        for row in reader:
+                            # Normalize keys and values (strip whitespace)
+                            cleaned_row = { (k or '').strip(): (v or '').strip() for k, v in row.items() }
+                            user_id = cleaned_row.get('User ID') or cleaned_row.get('user_id') or cleaned_row.get('id')
+                            if not user_id:
+                                # Fallback: synthesize a user id from filename and row number
+                                user_id = f"{os.path.splitext(csv_file)[0]}_{row_count+1}"
+
+                            self.user_data[user_id] = cleaned_row
+                            row_count += 1
+
+                        logger.info(f"✅ Loaded {row_count} user record(s) from {csv_file}")
+
                 except Exception as e:
                     logger.error(f"❌ Error loading user data from {csv_file}: {e}")
-            
-            # Set first user as default if available
-            if self.user_data:
+
+            # Set first user as default if available and none selected yet
+            if self.user_data and not self.current_user:
                 first_user = list(self.user_data.keys())[0]
                 self.set_current_user(first_user)
                 logger.info(f"🎯 Set default user: {first_user}")
-            
+
         except Exception as e:
             logger.error(f"❌ Error loading user data: {e}")
     
@@ -447,29 +450,39 @@ class UserDataManager:
         elif step == "father_name":
             expected_father = user_data.get("Guarantor Father's Name", '').lower().strip()
             if expected_father and expected_father in user_response_lower:
-                return True, f"✅ Correct! Your father's name is {user_data.get('Guarantor Father Name')}. Thank you for confirming."
+                return True, f"✅ Correct! Your father's name is {user_data.get("Guarantor Father's Name")}. Thank you for confirming."
             elif expected_father:
-                return False, f"❌ That doesn't match our records. According to our data, your father's name is {user_data.get('Guarantor Father Name')}. Please confirm."
+                return False, f"❌ That doesn't match our records. According to our data, your father's name is {user_data.get("Guarantor Father's Name")}. Please confirm."
             else:
                 return True, "Thank you for providing your father's name."
         
         elif step == "applicant_knowledge":
             expected_applicant = user_data.get('Applicant Name', '').lower().strip()
+            positive_indicators = [
+                'yes', 'हाँ', 'हां', 'जी', 'ok', 'okay', 'haan', 'bilkul', 'sure', 'confirm'
+            ]
+            negative_indicators = ['no', 'नहीं', 'नहि']
+            if any(ind in user_response_lower for ind in positive_indicators):
+                return True, "✅ Thank you for confirming that you know the applicant."
+            if any(ind in user_response_lower for ind in negative_indicators):
+                return False, f"❌ Please confirm that you know {user_data.get('Applicant Name')}. Your documents were submitted as a guarantor for their loan application."
             if expected_applicant and expected_applicant in user_response_lower:
                 return True, "✅ Thank you for confirming that you know the applicant."
-            elif expected_applicant:
-                return False, f"❌ Please confirm that you know {user_data.get('Applicant Name')}. Your documents were submitted as a guarantor for their loan application."
-            else:
-                return True, "Thank you for confirming your knowledge of the applicant."
+            return True, "Thank you for confirming your knowledge of the applicant."
         
         elif step == "relationship":
             expected_relation = user_data.get('Guarantor Relation with Applicant', '').lower().strip()
-            if expected_relation and expected_relation in user_response_lower:
+            positive_indicators = ['yes', 'हाँ', 'हां', 'जी', 'ok', 'okay']
+            # Accept if they provide any non-empty relation or a positive confirmation
+            if any(ind in user_response_lower for ind in positive_indicators):
+                return True, f"✅ Thank you. Noted your relationship with the applicant as {user_data.get('Guarantor Relation with Applicant', 'provided')}"
+            if expected_relation and (expected_relation in user_response_lower):
                 return True, f"✅ Correct! Your relationship with the applicant is {user_data.get('Guarantor Relation with Applicant')}. Thank you for confirming."
-            elif expected_relation:
+            if user_response_lower.strip():
+                return True, "✅ Thank you for providing your relationship with the applicant."
+            if expected_relation:
                 return False, f"❌ That doesn't match our records. According to our data, your relationship with the applicant is {user_data.get('Guarantor Relation with Applicant')}. Please confirm."
-            else:
-                return True, "Thank you for providing your relationship with the applicant."
+            return True, "Thank you for providing your relationship with the applicant."
         
         # For other steps, just acknowledge the response
         return True, "Thank you for your response."
@@ -734,7 +747,7 @@ def ques_responses(question: str, history: list, system_prompt: str) -> str:
         if question.lower() in ['reset', 'restart', 'start over', 'नया शुरू करें']:
             script_manager.reset_conversation()
             timer.end_timer("Retrieval")
-            return "🔄 Conversation reset. Starting fresh verification process.\n\n" + script_manager.get_next_step(history, "")
+            return "🔄 Conversation reset. Starting fresh verification process.\n\n" + script_manager.get_script_text('start')
         
         if question.lower() in ['progress', 'status', 'कहाँ हैं हम']:
             summary = script_manager.get_conversation_summary()
@@ -755,7 +768,7 @@ def ques_responses(question: str, history: list, system_prompt: str) -> str:
             if user_data_manager.set_current_user(user_id):
                 script_manager.reset_conversation()
                 timer.end_timer("Retrieval")
-                return f"✅ Switched to user: {user_id}\n🔄 Conversation reset for new user.\n\n" + script_manager.get_next_step(history, "")
+                return f"✅ Switched to user: {user_id}\n🔄 Conversation reset for new user.\n\n" + script_manager.get_script_text('start')
             else:
                 timer.end_timer("Retrieval")
                 available_users = user_data_manager.get_all_users()
@@ -880,7 +893,7 @@ def main():
         if user_data_manager.user_data:
             for user_id, user_info in user_data_manager.user_data.items():
                 logger.info(f"  👤 {user_id}: {user_info.get('Applicant Name', 'Unknown')} -> {user_info.get('Guarantor Name', 'Unknown')}")
-                logger.info(f"     🌐 Preferred Language: {user_info.get('Guarantor Language', 'Hindi')}")
+                logger.info(f"     🌐 Preferred Language: {user_info.get("Guarantor's Language", 'Hindi')}")
         else:
             logger.warning("  ⚠️ No user data loaded")
         
