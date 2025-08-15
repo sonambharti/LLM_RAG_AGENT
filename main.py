@@ -307,10 +307,10 @@ def initialize_rag_chain():
         )
         
         # Create LLM
-        llm = ChatOpenAI(model_name="gpt-4o-mini", temperature=0)
+        llm = ChatOpenAI(model_name="gpt-4o", temperature=0)
         # Lightweight LLM for controlled step generation
         global llm_simple
-        llm_simple = ChatOpenAI(model_name="gpt-4o-mini", temperature=0.2)
+        llm_simple = ChatOpenAI(model_name="gpt-4o", temperature=0.2)
         
         # Create QA chain
         qa_chain = RetrievalQA.from_chain_type(
