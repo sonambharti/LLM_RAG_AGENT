@@ -12,10 +12,13 @@ from langchain.prompts import PromptTemplate
 from langchain.memory import ConversationBufferMemory
 from typing import List
 import gradio as gr
+from dotenv import load_dotenv
 
+load_dotenv()
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 # ----------- Config -----------
 if not os.environ.get("GROQ_API_KEY"):
-    os.environ["GROQ_API_KEY"] = ""
+    os.environ["GROQ_API_KEY"] = GROQ_API_KEY
 
 HARDCODED_FOLDER_PATH = "./Insurance PDFs"
 SUPPORTED_EXTENSIONS = {'.pdf', '.docx', '.txt', '.doc', '.md'}

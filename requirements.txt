@@ -1,12 +1,19 @@
-langchain[groq]
+# langchain[groq]
+pandas
+langchain-openai
+langchain-huggingface
+pinecone
+langchain-pinecone
+pinecone-client
 langchain-text-splitters 
 langchain-community 
 langgraph
-langchain-openai
 langchain-huggingface
 sentence-transformers
 ipykernel
 pymupdf
+pypdf
 python-docx
 gradio
 faiss-cpu
+python-dotenv
