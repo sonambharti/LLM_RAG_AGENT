@@ -102,18 +102,24 @@ cd LLM_RAG_Agent
 pip install -r requirements.txt
 ```
 
+### 3. SETUP WEAVITE CLIENT LOCALLY
+Write docker-compose file to setup weaviate-client locally.
+```BASH
+docker-compose up -d
+```
+
 ### 3. Configure API Key
 Set your Groq API key in one of these ways:
 
 **Option A: Environment Variable (Recommended)**
 ```bash
-export GROQ_API_KEY="your_api_key_here"
+export OPENAI_API_KEY="your_api_key_here"
 ```
 
 **Option B: Direct in Code**
 Edit `main.py` line 18:
 ```python
-os.environ["GROQ_API_KEY"] = "your_actual_api_key_here"
+os.environ["OPENAI_AI_KEY"] = "your_actual_api_key_here"
 ```
 
 ### 4. Prepare Documents
