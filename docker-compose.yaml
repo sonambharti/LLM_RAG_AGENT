@@ -1,28 +1,18 @@
-version: '3.4'
 services:
   weaviate:
-    image: semitechnologies/weaviate:1.26.3
-    restart: unless-stopped
+    image: semitechnologies/weaviate:1.26.3 # Or a specific version
     ports:
-      - "8080:8080"   # REST
-      - "50051:50051" # gRPC
+      - "8080:8080" # Weaviate API port
+      - "50051:50051" # gRPC port
+    restart: on-failure
     environment:
       QUERY_DEFAULTS_LIMIT: 25
       AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED: 'true'
       PERSISTENCE_DATA_PATH: '/var/lib/weaviate'
-      DEFAULT_VECTORIZER_MODULE: 'none'
-      ENABLE_MODULES: 'text2vec-transformers'
-      TRANSFORMERS_INFERENCE_API: 'http://t2v-transformers:8080'
-      CLUSTER_HOSTNAME: 'node1'
+      DEFAULT_VECTORIZER_MODULE: 'none' # Or a specific vectorizer module like 'text2vec-openai'
+      ENABLE_MODULES: '' # Add modules here, e.g., 'text2vec-openai,qna-openai'
+      # If using modules that require API keys:
+      # OPENAI_APIKEY: 'YOUR_OPENAI_API_KEY'
+      # COHERE_APIKEY: 'YOUR_COHERE_API_KEY'
     volumes:
-      - weaviate_data:/var/lib/weaviate
-
-  t2v-transformers:
-    image: semitechnologies/transformers-inference:sentence-transformers-all-mpnet-base-v2
-    environment:
-      ENABLE_CUDA: '0' # change to '1' if you have GPU + CUDA setup
-    ports:
-      - "8081:8080"
-
-volumes:
-  weaviate_data:
+      - ./weaviate_data:/var/lib/weaviate # Persist data outside the container

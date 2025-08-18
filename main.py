@@ -192,9 +192,11 @@ def initialize_rag_chain():
     if not docs:
         raise ValueError(f"No supported documents found in '{HARDCODED_FOLDER_PATH}'. Please add your files.")
     vectorstore = build_vectorstore(docs)
-
+    
+    timer.start_timer("Time taken by Retriever")
     retriever = vectorstore.as_retriever(search_type="similarity", search_kwargs={"k": 3})
-
+    timer.end_time("Time taken by Retriever")
+    
     memory = ConversationBufferMemory(memory_key="history", input_key="query", return_messages=True)
 
     # Prompt enforces script-following without leaking PII.
@@ -399,11 +401,11 @@ class ScriptManager:
         self.script_templates = {
             "Hindi": {
                 "identify_user": "कृपया अपना यूज़र आईडी बताइए (उदाहरण: user_1)।",
-                "start": "नमस्कार, क्या मैं गारंटर से बात कर रही हूँ?",
+                "start": "नमस्कार, क्या मैं {Guarantor Name} से बात कर रही हूँ?",
                 "intro": "मैं Rekha, SK Finance Limited से बोल रही हूँ। यह कॉल आपकी गारंटर वेरिफ़िकेशन से संबंधित है। क्या मैं दो मिनट बात कर सकती हूँ?",
                 "recording": "धन्यवाद। यह कॉल ट्रेनिंग और क्वालिटी पर्पज़ के लिए रिकॉर्ड किया जा रहा है।",
-                "applicant_knowledge": "क्या आप आवेदक को जानते हैं?",
-                "relationship": "आपका आवेदक से क्या संबंध है?",
+                "applicant_knowledge": "क्या आप {Applicant Name} को जानते हैं?",
+                "relationship": "आपका {Applicant Name} से क्या संबंध है?",
                 "dob": "कृपया अपनी जन्म तिथि बताइए।",
                 "father_name": "कृपया अपने पिता का नाम बताइए।",
                 "documents": "क्या दस्तावेज़ आपने स्वयं जमा किए थे?",
@@ -414,11 +416,11 @@ class ScriptManager:
             },
             "English": {
                 "identify_user": "Please provide your User ID (e.g., user_1).",
-                "start": "Hello, am I speaking with the guarantor?",
+                "start": "Hello, am I speaking with the {Guarantor Name}?",
                 "intro": "I am Rekha from SK Finance Limited. This call is for your guarantor verification. May I speak with you for two minutes?",
                 "recording": "Thank you. This call will be recorded for training and quality purposes.",
-                "applicant_knowledge": "Do you know the applicant?",
-                "relationship": "What is your relationship to the applicant?",
+                "applicant_knowledge": "Do you know the {Applicant Name}?",
+                "relationship": "What is your relationship to the {Applicant Name}?",
                 "dob": "Please tell me your date of birth.",
                 "father_name": "Please tell me your father's name.",
                 "documents": "Were the documents submitted by you personally?",
@@ -630,8 +632,8 @@ def main():
             title="💬 Rekha | SK Finance Verification Assistant (Privacy-First)",
             description=(
                 """
-                🤖 **AI-Powered Loan Verification Assistant** (local FAISS index for privacy)\n\n
-                **🚀 Quick Start:**\n                - Type 'hello' or 'hi' to begin\n                - Type 'help' for instructions\n                - Type 'progress' to see your current step\n                - Type 'reset' to start over\n\n                **👤 User Management:**\n                - Type 'users' to list available user IDs\n                - Type 'switch user [user_id]' to change users\n\n                **🔏 Data Protection:**\n                - No personal data from CSV is ever read aloud or shown in the UI\n                - All comparisons are semantic and privacy-preserving\n                - Vector search uses **local FAISS** (no external vector DB)\n                """
+                🤖 **AI-Powered Loan Verification Assistant** (local Weaviate index for privacy)\n\n
+                **🚀 Quick Start:**\n- Type 'hello' or 'hi' to begin\n- Type 'help' for instructions\n - Type 'progress' to see your current step\n- Type 'reset' to start over\n\n**👤 User Management:**\n- Type 'users' to list available user IDs\n- Type 'switch user [user_id]' to change users\n\n**🔏 Data Protection:**\n- No personal data from CSV is ever read aloud or shown in the UI\n- All comparisons are semantic and privacy-preserving\n- Vector search uses **local Weaviate** (no external vector DB)\n"""
             ),
             theme="soft",
             examples=[["hello"], ["hi"], ["नमस्ते"], ["yes"], ["हाँ"], ["help"], ["progress"], ["reset"], ["users"], ["switch user user_1"], ["English"], ["Hindi"]],
