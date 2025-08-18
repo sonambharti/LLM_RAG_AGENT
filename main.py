@@ -195,7 +195,7 @@ def initialize_rag_chain():
     
     timer.start_timer("Time taken by Retriever")
     retriever = vectorstore.as_retriever(search_type="similarity", search_kwargs={"k": 3})
-    timer.end_time("Time taken by Retriever")
+    timer.end_timer("Time taken by Retriever")
     
     memory = ConversationBufferMemory(memory_key="history", input_key="query", return_messages=True)
 
@@ -401,11 +401,11 @@ class ScriptManager:
         self.script_templates = {
             "Hindi": {
                 "identify_user": "कृपया अपना यूज़र आईडी बताइए (उदाहरण: user_1)।",
-                "start": "नमस्कार, क्या मैं {Guarantor Name} से बात कर रही हूँ?",
+                "start": "नमस्कार, क्या मैं {{Guarantor Name}} से बात कर रही हूँ?",
                 "intro": "मैं Rekha, SK Finance Limited से बोल रही हूँ। यह कॉल आपकी गारंटर वेरिफ़िकेशन से संबंधित है। क्या मैं दो मिनट बात कर सकती हूँ?",
                 "recording": "धन्यवाद। यह कॉल ट्रेनिंग और क्वालिटी पर्पज़ के लिए रिकॉर्ड किया जा रहा है।",
-                "applicant_knowledge": "क्या आप {Applicant Name} को जानते हैं?",
-                "relationship": "आपका {Applicant Name} से क्या संबंध है?",
+                "applicant_knowledge": "क्या आप {{Applicant Name}} को जानते हैं?",
+                "relationship": "आपका {{Applicant Name}} से क्या संबंध है?",
                 "dob": "कृपया अपनी जन्म तिथि बताइए।",
                 "father_name": "कृपया अपने पिता का नाम बताइए।",
                 "documents": "क्या दस्तावेज़ आपने स्वयं जमा किए थे?",
