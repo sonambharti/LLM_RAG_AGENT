@@ -209,9 +209,44 @@ def recruiter_responses(question: str, system_prompt, history: list) -> str:
     if vectorstore is None:
         return "❌ RAG chain is not initialized. Please check server logs."
     
+    # --- Detect candidate name in query ---
+    # # Collect all candidate names stored in vectorstore metadata
+    # with vectorstore.client as client:
+    #     schema = client.schema.get()
+    #     # Just in case you want to list out candidates from schema
+    #     # but since we already load docs, let's extract names from them:
+    #     for class_def in schema["classes"]:
+    #         if class_def["class"] == "Document":
+    #             pass  # placeholder if needed
+
+    # # Instead of schema, safer to gather names from loaded docs
+    # candidate_names = []
+    # retriever_for_names = vectorstore.as_retriever(search_type="similarity", search_kwargs={"k": 50})
+    # docs_for_names = retriever_for_names.get_relevant_documents("list all resumes")
+    # candidate_names = list({doc.metadata.get("candidate_name") for doc in docs_for_names if "candidate_name" in doc.metadata})
+
+    # user_name = None
+    # for name in candidate_names:
+    #     if name and name.lower() in question.lower():
+    #         user_name = name
+    #         break
+    # --- Build where filter if a name was mentioned ---
+    # where_filter = None
+    # if user_name:
+    #     where_filter = {
+    #         "path": ["candidate_name"],
+    #         "operator": "Equal",
+    #         "valueText": user_name
+    #     }
+    
     # Retriever
     start_retrieval = time.perf_counter()
-    retriever = vectorstore.as_retriever(search_type="similarity", search_kwargs={"k": 3})
+    retriever_kwargs = {"k": 3}
+    # if where_filter:
+    #     retriever_kwargs["where"] = where_filter
+
+    retriever = vectorstore.as_retriever(search_type="similarity", search_kwargs=retriever_kwargs)
+    # retriever = vectorstore.as_retriever(search_type="similarity", search_kwargs={"k": 3})
     docs = retriever.get_relevant_documents(question)  
     end_retrieval = time.perf_counter()
     print(f"⏱ Retrieval: {end_retrieval - start_retrieval:.2f} seconds")
@@ -257,8 +292,9 @@ def recruiter_responses(question: str, system_prompt, history: list) -> str:
             {question}
 
             TASK:
-            - Always follow STRICT RULES provided above.
-            - Use history to remember the last mentioned ACTIVE_CANDIDATE if no new name is given.
+            - Always follow STRICT RULES provided in the instructions.
+            - Once recruiter said a candidate name then set it as ACTIVE_CANDIDATE, and then next preceeding conversation will be for that candidate only.
+            - Use history to remember the last mentioned ACTIVE_CANDIDATE until no new candidate name is provided by the recruiter.
             - Only provide details that exist in the resumes (from CONTEXT).
             - If unsure, explicitly say you don’t know instead of guessing.
 

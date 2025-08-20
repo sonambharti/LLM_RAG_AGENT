@@ -2,13 +2,14 @@ import os
 import csv
 import time
 import re
-from typing import List, Dict, Tuple, Optional
 import requests, json
+from typing import List, Dict, Tuple, Optional
+import logging
+from uuid import uuid4
 
 import fitz
 from docx import Document as DocxDocument
 from dotenv import load_dotenv
-import logging
 
 # LangChain / RAG
 from langchain.docstore.document import Document
@@ -16,8 +17,8 @@ from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_openai import ChatOpenAI
 from langchain.memory import ConversationBufferMemory
-from langchain.prompts import PromptTemplate
-from langchain.chains import RetrievalQA
+from langchain_core.prompts import PromptTemplate, ChatPromptTemplate, MessagesPlaceholder
+from langchain_core.runnables.history import RunnableWithMessageHistory
 from langchain_community.document_loaders import CSVLoader
 import weaviate
 # import weaviate.classes.init as wvc
@@ -37,94 +38,85 @@ if not OPENAI_API_KEY:
     raise ValueError("OPENAI_API_KEY environment variable is not set")
 os.environ["OPENAI_API_KEY"] = OPENAI_API_KEY
 
-
-# Connect to local open-source Weaviate
-# client = weaviate.connect_to_local(
-#     host="localhost",
-#     port=8080,       # disables gRPC (REST only)
-#     skip_init_checks=True
-# )
-
 # ================== CONFIG ==================
+# Metadata for multi-tenancy and precise data retrieval
+CLIENT_NAME = "sk_finance"
+USECASE = "guarantor_verification"
+BOT_ID = "rekha_v1"
+
+HARDCODED_FOLDER_PATH = "./SK_Finance_SOP"
+USER_DATA_FILE = "./User_Data/user.csv"
+SUPPORTED_EXTENSIONS = {'.pdf', '.docx', '.txt', '.doc', '.md', '.csv'}
+
 HARDCODED_FOLDER_PATH = "./SK_Finance_SOP"
 SUPPORTED_EXTENSIONS = {'.pdf', '.docx', '.txt', '.doc', '.md', '.csv'}
 
 # ================== LOADERS ==================
 
-def load_pdf(path: str) -> List[Document]:
-    try:
-        doc = fitz.open(path)
-        documents = []
-        for page_num, page in enumerate(doc):
-            text = page.get_text()
-            if text.strip():
-                documents.append(Document(page_content=text, metadata={"source": os.path.basename(path), "page": page_num+1}))
-        doc.close()
-        return documents
-    except Exception as e:
-        logger.error(f"Error loading PDF {path}: {e}")
-        return []
-
-def load_docx(path: str) -> List[Document]:
-    try:
-        doc = DocxDocument(path)
-        text = "\n".join(p.text for p in doc.paragraphs if p.text.strip())
-        return [Document(page_content=text, metadata={"source": os.path.basename(path)})]
-    except Exception as e:
-        logger.error(f"Error loading DOCX {path}: {e}")
-        return []
-
-def load_txt(path: str) -> List[Document]:
-    try:
-        with open(path, 'r', encoding='utf-8') as f:
-            text = f.read()
-        return [Document(page_content=text, metadata={"source": os.path.basename(path)})]
-    except Exception as e:
-        logger.error(f"Error loading text file {path}: {e}")
-        return []
-
-def load_csv_generic(path: str) -> List[Document]:
-    try:
-        loader = CSVLoader(file_path=path)
-        return loader.load()
-    except Exception as e:
-        logger.error(f"Error loading CSV {path}: {e}")
-        return []
-
 def load_file(path: str) -> List[Document]:
+    """Loads a single file and injects client metadata."""
     ext = os.path.splitext(path)[-1].lower()
-    if ext == '.pdf':
-        return load_pdf(path)
-    elif ext in {'.docx', '.doc'}:
-        return load_docx(path)
-    elif ext in {'.txt', '.md'}:
-        return load_txt(path)
-    elif ext == '.csv':
-        # SOP CSVs only (NOT user PII). User PII is loaded separately via UserDataManager.
-        return load_csv_generic(path)
-    return []
+    
+    # Define the metadata to be added to each document
+    metadata = {
+        "source": os.path.basename(path),
+        "client_name": CLIENT_NAME,
+        "usecase": USECASE,
+        "bot_id": BOT_ID
+    }
+    
+    docs = []
+    try:
+        if ext == '.pdf':
+            doc = fitz.open(path)
+            for page_num, page in enumerate(doc):
+                text = page.get_text()
+                if text.strip():
+                    page_metadata = metadata.copy()
+                    page_metadata["page"] = page_num + 1
+                    docs.append(Document(page_content=text, metadata=page_metadata))
+            doc.close()
+        elif ext in {'.docx', '.doc'}:
+            doc = DocxDocument(path)
+            text = "\n".join(p.text for p in doc.paragraphs if p.text.strip())
+            docs.append(Document(page_content=text, metadata=metadata))
+        elif ext in {'.txt', '.md'}:
+            with open(path, 'r', encoding='utf-8') as f:
+                text = f.read()
+            docs.append(Document(page_content=text, metadata=metadata))
+        elif ext == '.csv':
+            # Note: CSVLoader creates docs per row, we'd need to extend it to add metadata.
+            # For simplicity, we assume generic loaders handle this.
+            # In a real scenario, you'd loop through CSVLoader results and update metadata.
+            raw_docs = CSVLoader(file_path=path).load()
+            for doc in raw_docs:
+                doc.metadata.update(metadata)
+                docs.append(doc)
+    except Exception as e:
+        logger.error(f"Error loading file {path}: {e}")
+    
+    return docs
 
 def load_documents_from_folder(folder_path: str) -> Tuple[List[Document], int]:
+    """Loads all supported documents from a folder and measures performance."""
     start_loader = time.perf_counter()
     docs, file_count = [], 0
     if not os.path.exists(folder_path):
         raise FileNotFoundError(f"Folder '{folder_path}' does not exist")
+    
     logger.info(f"📁 Scanning folder: {folder_path}")
     for root, _, files in os.walk(folder_path):
         for file in files:
             if os.path.splitext(file)[-1].lower() in SUPPORTED_EXTENSIONS:
                 file_path = os.path.join(root, file)
-                logger.info(f"  📄 Loading file: {file}")
-                try:
-                    file_docs = load_file(file_path)
+                file_docs = load_file(file_path)
+                if file_docs:
                     docs.extend(file_docs)
                     file_count += 1
-                    logger.info(f"    ✅ Loaded {len(file_docs)} document(s) from {file}")
-                except Exception as e:
-                    logger.error(f"    ❌ Error loading {file}: {e}")
+    
     end_loader = time.perf_counter()
-    logger.info(f"📊 Total documents loaded: {len(docs)} from {file_count} files")
-    print(f"Time taken by Data Loader: {end_loader - start_loader:.2f} seconds")
+    logger.info(f"⏱️ Data Loading: Completed in {end_loader - start_loader:.4f} seconds.")
+    logger.info(f"📊 Total documents loaded: {len(docs)} from {file_count} files.")
     return docs, file_count
 
 
@@ -132,35 +124,36 @@ def load_documents_from_folder(folder_path: str) -> Tuple[List[Document], int]:
 
 def build_vectorstore(documents: List[Document]) -> Weaviate:
     start_chunk = time.perf_counter()
-    splitter = RecursiveCharacterTextSplitter(chunk_size=1200, chunk_overlap=120)
+    splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=100)
     chunks = splitter.split_documents(documents)
     end_chunk = time.perf_counter()
-    print(f"⏱ Chunking & Splitting: {end_chunk - start_chunk:.2f} seconds")
+    logger.info(f"⏱️ Chunking & Splitting: Completed in {end_chunk - start_chunk:.4f} seconds ({len(chunks)} chunks created).")
 
-    # Embedding
-    start_embed = time.perf_counter()
+    # --- Embedding Model Load ---
+    start_embed_load = time.perf_counter()
     embeddings = HuggingFaceEmbeddings(
         model_name="sentence-transformers/all-mpnet-base-v2",
         model_kwargs={'device': 'cpu'}
     )
-    end_embed = time.perf_counter()
-    print(f"⏱ Embedding model load: {end_embed - start_embed:.2f} seconds")
+    end_embed_load = time.perf_counter()
+    logger.info(f"⏱️ Embedding Model Load: Completed in {end_embed_load - start_embed_load:.4f} seconds.")
 
-
-    # Vectorization
-    start_vector = time.perf_counter()
+    # --- Vector Indexing ---
+    start_indexing = time.perf_counter()
     client = weaviate.Client("http://localhost:8080")
-
+    # Ensure the schema is clean before adding new documents if necessary
+    # client.schema.delete_all() 
     vectorstore = Weaviate.from_documents(chunks, embeddings, client=client)
-    end_vector = time.perf_counter()
-    print(f"⏱ Vectorization (Weaviate build): {end_vector - start_vector:.2f} seconds \n\n")
-    logger.info(f"💾 Stored {len(chunks)} chunks in Weaviate (open source, local)")
+    end_indexing = time.perf_counter()
+    logger.info(f"⏱️ Vector Indexing: Stored {len(chunks)} chunks in Weaviate in {end_indexing - start_indexing:.4f} seconds.")
+    
     return vectorstore
+
 
 # ================== GLOBALS ==================
 qa_chain = None
 vectorstore = None
-llm_simple = None
+llm_simple = ChatOpenAI(model_name="gpt-4o-mini", temperature=0) # For quick classifications
 
 # ================== RAG INIT ==================
 
@@ -172,9 +165,20 @@ def initialize_rag_chain():
         raise ValueError(f"No supported documents found in '{HARDCODED_FOLDER_PATH}'. Please add your files.")
     vectorstore = build_vectorstore(docs)
     
+    # --- Filtered Retriever Setup ---
+    # This filter ensures we only retrieve documents relevant to THIS bot.
+    where_filter = {
+        "operator": "And",
+        "operands": [
+            {"path": ["client_name"], "operator": "Equal", "valueString": CLIENT_NAME},
+            {"path": ["usecase"], "operator": "Equal", "valueString": USECASE},
+            {"path": ["bot_id"], "operator": "Equal", "valueString": BOT_ID},
+        ],
+    }
+    
     # Retriever
     start_retrieval = time.perf_counter()
-    retriever = vectorstore.as_retriever(search_type="similarity", search_kwargs={"k": 3})
+    retriever = vectorstore.as_retriever(search_type="similarity", search_kwargs={"k": 3, "where": where_filter})
     end_retrieval = time.perf_counter()
     print(f"⏱ Retrieval: {end_retrieval - start_retrieval:.2f} seconds")
     
@@ -421,6 +425,7 @@ class ScriptManager:
         self.current_language = "Hindi"
         self.language_switched = False
         self.verification_results = {"applicant_knowledge": None, "relationship": None, "dob": None, "father_name": None}
+        self.reset_conversation()
 
     def _t(self, key: str, **kwargs) -> str:
         text = self.script_templates[self.current_language].get(key, key)
@@ -598,6 +603,14 @@ def get_help_text():
 # ================== MAIN ==================
 
 def main():
+    """Sets up the Gradio UI and launches the application."""
+    if not user_data_manager.user_data:
+        logger.error("No user data loaded. The application cannot function.")
+        with gr.Blocks() as demo:
+            gr.Markdown("## ❌ Application failed to start\n**Error:** `User_Data/user.csv` could not be loaded. Please check the file and logs.")
+        demo.launch()
+        return
+    
     try:
         initialize_rag_chain()
         global script_manager
@@ -621,6 +634,7 @@ def main():
         )
         logger.info("🚀 Launching Gradio interface...")
         interface.queue().launch(share=False, show_error=True)
+        
     except Exception as e:
         logger.error(f"❌ Failed to initialize the application: {e}")
         raise
